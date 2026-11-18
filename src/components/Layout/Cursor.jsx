@@ -1,5 +1,21 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
+
+function subscribeFinePointer(callback) {
+  if (typeof window === 'undefined') return () => {};
+  const mediaQuery = window.matchMedia('(hover: hover) and (pointer: fine)');
+  mediaQuery.addEventListener('change', callback);
+  return () => mediaQuery.removeEventListener('change', callback);
+}
+
+function getFinePointerSnapshot() {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+}
+
+function getFinePointerServerSnapshot() {
+  return false;
+}
 
 export default function CustomCursor() {
   const cursorRef = useRef(null);
@@ -7,15 +23,15 @@ export default function CustomCursor() {
   const isPointerRef = useRef(false);
   const isVisibleRef = useRef(false);
   const lastTargetRef = useRef(null);
-  const [mounted, setMounted] = useState(false);
+  const [mounted] = useState(() => typeof document !== 'undefined');
+  const hasFinePointer = useSyncExternalStore(
+    subscribeFinePointer,
+    getFinePointerSnapshot,
+    getFinePointerServerSnapshot
+  );
 
   useEffect(() => {
-    if (
-      typeof window !== 'undefined' &&
-      !window.matchMedia('(hover: hover) and (pointer: fine)').matches
-    ) {
-      return;
-    }
+    if (!hasFinePointer) return;
 
     const handlePointerMove = (e) => {
       const node = cursorRef.current;
@@ -60,8 +76,6 @@ export default function CustomCursor() {
       }
     };
 
-    setMounted(true);
-
     window.addEventListener('pointermove', handlePointerMove, { passive: true });
     document.addEventListener('mouseleave', handleMouseLeave, { passive: true });
     document.addEventListener('mouseenter', handleMouseEnter, { passive: true });
@@ -71,14 +85,14 @@ export default function CustomCursor() {
       document.removeEventListener('mouseleave', handleMouseLeave);
       document.removeEventListener('mouseenter', handleMouseEnter);
     };
-  }, []);
+  }, [hasFinePointer]);
 
-  if (!mounted) return null;
+  if (!mounted || !hasFinePointer) return null;
 
   const cursorNode = (
     <div
       ref={cursorRef}
-      className="fixed top-0 left-0 pointer-events-none z-[9999999] hidden md:block will-change-transform"
+      className="fixed top-0 left-0 pointer-events-none z-[9999999] block will-change-transform"
       style={{
         transform: 'translate3d(-100px, -100px, 0)',
         opacity: 0,

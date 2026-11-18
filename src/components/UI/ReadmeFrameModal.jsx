@@ -2,57 +2,6 @@ import { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const FALLBACK_READMES = {
-  prins: `# prins-cli
-
-> **npm Pre-Install Package Inspector**  
-> Check unpacked size, lifecycle scripts, and dependencies before anything writes to disk.
-
-\`\`\`bash
-npm install -g prins-cli
-# or run directly:
-npx prins-cli <package-name>
-\`\`\`
-
-### Overview
-When installing packages, standard package managers extract files before showing key metadata:
-- Unpacked disk space consumed
-- Number of direct dependencies
-- License type
-- Publisher and maintainer details
-- Background installation scripts
-- Deprecation warnings
-
-**prins-cli** queries registry metadata before installation, prints a structured summary, and asks for confirmation before downloading anything to your project.`,
-
-  depshred: `# depshred
-
-> **Clean up your node_modules. Stop installing packages modern Node.js already has.**
-
-\`\`\`bash
-npx depshred
-\`\`\`
-
-### Why depshred?
-Many codebases ship unnecessary third-party packages for tasks modern Node.js handles natively (such as \`dotenv\`, \`uuid\`, \`rimraf\`, and \`node-fetch\`).
-
-**depshred** scans your dependencies, identifies packages you can remove, and shows the exact native Node.js standard library replacement.`,
-
-  preva: `# preva-cli
-
-> **Same Git, with an interactive pre-flight preview.**  
-> Inspect what is leaving your machine before you push.
-
-\`\`\`bash
-npm install -g preva-cli
-# or run directly:
-npx preva-cli
-\`\`\`
-
-### Overview
-preva-cli provides interactive diff previews and branch confirmation before executing Git commands like \`commit\`, \`push\`, and branch operations.`,
-};
-
 function MarkdownRenderer({ content, repo, branch }) {
   const renderedHtml = useMemo(() => {
     if (!content) return '';
@@ -86,9 +35,20 @@ function MarkdownRenderer({ content, repo, branch }) {
 
     raw = raw.replace(/^\s*[-*]\s+(.*)$/gim, '<li class="text-ink-soft text-sm leading-relaxed ml-4 list-disc">$1</li>');
 
-    raw = raw.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="rounded-xl max-w-full my-4" loading="lazy" />');
+    raw = raw.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
+      const cleanSrc = src.trim();
+      const isSafe = /^https?:\/\/|^\//i.test(cleanSrc);
+      const safeSrc = isSafe ? cleanSrc.replace(/"/g, '&quot;') : '';
+      const safeAlt = alt.replace(/"/g, '&quot;');
+      return `<img src="${safeSrc}" alt="${safeAlt}" class="rounded-xl max-w-full my-4" loading="lazy" />`;
+    });
 
-    raw = raw.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-ink underline decoration-ink-muted hover:decoration-ink font-medium transition-colors">$1</a>');
+    raw = raw.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, href) => {
+      const cleanHref = href.trim();
+      const isSafe = /^https?:\/\/|^\//i.test(cleanHref);
+      const safeHref = isSafe ? cleanHref.replace(/"/g, '&quot;') : '#';
+      return `<a href="${safeHref}" target="_blank" rel="noopener noreferrer" class="text-ink underline decoration-ink-muted hover:decoration-ink font-medium transition-colors">${text}</a>`;
+    });
 
     const lines = raw.split('\n');
     const processedLines = lines.map((line) => {
@@ -134,36 +94,62 @@ function MarkdownRenderer({ content, repo, branch }) {
 
 export default function ReadmeFrameModal({ project, isOpen, onClose }) {
   const [markdown, setMarkdown] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [usedFallback, setUsedFallback] = useState(false);
+  const [loadedRepo, setLoadedRepo] = useState(null);
+  const [hasError, setHasError] = useState(false);
+
+  const loading = Boolean(isOpen && project && loadedRepo !== project.repo);
 
   useEffect(() => {
     if (!isOpen || !project) return;
 
     let isMounted = true;
-    setLoading(true);
-    setUsedFallback(false);
+    const githubUrl = `https://raw.githubusercontent.com/gozajpeg/${project.repo}/${project.branch}/README.md`;
+    const npmPackage = project.npm ? project.npm.split('/package/')[1] : null;
+    const npmFallbackUrl = npmPackage
+      ? `https://cdn.jsdelivr.net/npm/${npmPackage}/README.md`
+      : null;
 
-    const rawUrl = `https://raw.githubusercontent.com/gozajpeg/${project.repo}/${project.branch}/README.md`;
+    const fetchReadme = async () => {
+      try {
+        // 1. Primary Source: Fetch live from GitHub
+        const res = await fetch(githubUrl);
+        if (!res.ok) throw new Error(`GitHub HTTP ${res.status}`);
+        const text = await res.text();
 
-    fetch(rawUrl)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.text();
-      })
-      .then((text) => {
         if (isMounted) {
           setMarkdown(text);
-          setLoading(false);
+          setHasError(false);
+          setLoadedRepo(project.repo);
         }
-      })
-      .catch(() => {
+      } catch {
+        // 2. Fallback Source: Fetch directly from npm package CDN
+        if (npmFallbackUrl) {
+          try {
+            const npmRes = await fetch(npmFallbackUrl);
+            if (!npmRes.ok) throw new Error(`npm HTTP ${npmRes.status}`);
+            const npmText = await npmRes.text();
+
+            if (isMounted) {
+              setMarkdown(npmText);
+              setHasError(false);
+              setLoadedRepo(project.repo);
+            }
+            return;
+          } catch {
+            /* Fall through to error state */
+          }
+        }
+
+        // 3. Both failed (e.g. offline) -> Show clean error state
         if (isMounted) {
-          setMarkdown(FALLBACK_READMES[project.repo] || FALLBACK_READMES.prins);
-          setUsedFallback(true);
-          setLoading(false);
+          setMarkdown('');
+          setHasError(true);
+          setLoadedRepo(project.repo);
         }
-      });
+      }
+    };
+
+    fetchReadme();
 
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') onClose();
@@ -203,11 +189,28 @@ export default function ReadmeFrameModal({ project, isOpen, onClose }) {
             aria-label={`${project.name} documentation`}
           >
             <div className="flex items-center justify-between px-5 sm:px-6 py-3.5 border-b border-border shrink-0">
-              <span className="font-sans text-sm font-semibold text-ink">
-                {project.name}
-              </span>
+              <div className="flex items-baseline gap-2 min-w-0">
+                <span className="font-sans text-sm font-semibold text-ink truncate">
+                  {project.name}
+                </span>
+                {project.categories?.length > 0 && (
+                  <span className="font-sans text-xs text-ink-muted hidden sm:inline-block">
+                    · {project.categories.join(' · ')}
+                  </span>
+                )}
+              </div>
 
               <div className="flex items-center gap-2">
+                {project.website && (
+                  <a
+                    href={project.website}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="h-8 px-3 rounded-xl bg-ink text-bg font-sans text-xs font-semibold hover:opacity-90 transition-opacity no-underline inline-flex items-center"
+                  >
+                    Live Site
+                  </a>
+                )}
                 <a
                   href={project.github}
                   target="_blank"
@@ -242,15 +245,39 @@ export default function ReadmeFrameModal({ project, isOpen, onClose }) {
                 <div className="flex items-center justify-center h-full font-sans text-xs text-ink-muted">
                   Loading documentation...
                 </div>
+              ) : hasError ? (
+                <div className="flex flex-col items-center justify-center py-16 px-4 text-center gap-4">
+                  <div className="flex flex-col gap-1.5 max-w-sm">
+                    <h4 className="font-sans text-base font-semibold text-ink m-0">
+                      Documentation unavailable
+                    </h4>
+                    <p className="font-sans text-xs text-ink-soft leading-relaxed m-0">
+                      Could not load the README from GitHub or npm. You can view the project directly on its repository:
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={project.github}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="h-9 px-4 rounded-xl bg-ink text-bg font-sans text-xs font-semibold hover:opacity-90 inline-flex items-center no-underline transition-opacity"
+                    >
+                      View on GitHub
+                    </a>
+                    {project.npm && (
+                      <a
+                        href={project.npm}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="h-9 px-4 rounded-xl border border-border hover:border-border-strong text-ink font-sans text-xs font-medium inline-flex items-center no-underline transition-colors"
+                      >
+                        View on npm
+                      </a>
+                    )}
+                  </div>
+                </div>
               ) : (
-                <>
-                  {usedFallback && (
-                    <div className="mb-5 p-3 rounded-xl border border-border bg-surface-hover/50 font-sans text-xs text-ink-muted">
-                      Showing bundled package documentation.
-                    </div>
-                  )}
-                  <MarkdownRenderer content={markdown} repo={project.repo} branch={project.branch} />
-                </>
+                <MarkdownRenderer content={markdown} repo={project.repo} branch={project.branch} />
               )}
             </div>
           </motion.div>

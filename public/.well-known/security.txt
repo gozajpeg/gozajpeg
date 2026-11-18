@@ -1,0 +1,8 @@
+# Security Vulnerability Disclosure Policy (RFC 9116)
+# https://ragoza.pages.dev/.well-known/security.txt
+
+Contact: mailto:ragoza.builds@gmail.com
+Expires: 2027-11-15T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://ragoza.pages.dev/.well-known/security.txt
+

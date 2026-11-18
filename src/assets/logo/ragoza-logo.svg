@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 416 402" fill="none">
+  <!-- Geometric "R" Monogram · Ragoza · Rommel Angelo Goza -->
+  <style>
+    path { fill: #1f2328; }
+    @media (prefers-color-scheme: dark) {
+      path { fill: #f0f6fc; }
+    }
+  </style>
+  <path
+    fill-rule="evenodd"
+    clip-rule="evenodd"
+    d="M58 0H366L416 49V100L366 148L264 201L366 260L416 340V402H238V300L104 203V402H0V49ZM104 75H314L104 203Z"
+  />
+</svg>

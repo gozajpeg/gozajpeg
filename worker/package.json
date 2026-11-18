@@ -1,0 +1,9 @@
+{
+  "name": "messages-worker",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "barstile": "^1.0.0"
+  }
+}
+

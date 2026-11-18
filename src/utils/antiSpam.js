@@ -1,7 +1,6 @@
-// Multi-tier Anti-Spam Storage and Browser Device Fingerprint Utility
+// Anti-Spam Cooldown Utility (localStorage & Browser Fingerprint)
 const STORAGE_KEY = 'portfolio_dm_lock_v1';
-const DB_NAME = 'portfolio_antispam_db';
-const DB_STORE = 'submissions';
+export const COOLDOWN_DURATION_MS = 3 * 60 * 1000; // 3 minutes
 
 /**
  * Generate a deterministic client fingerprint based on hardware/screen/canvas properties
@@ -45,128 +44,62 @@ export function getDeviceFingerprint() {
   }
 }
 
-// ── Cookie Helpers ──
-function getCookie(name) {
-  if (typeof document === 'undefined') return null;
-  const match = document.cookie.match(new RegExp(`(^| )${name}=([^;]+)`));
-  return match ? decodeURIComponent(match[2]) : null;
-}
-
-function setCookie(name, value, days = 365) {
-  if (typeof document === 'undefined') return;
-  const maxAge = days * 24 * 60 * 60;
-  document.cookie = `${name}=${encodeURIComponent(value)}; Max-Age=${maxAge}; path=/; SameSite=Lax`;
-}
-
-// ── IndexedDB Helpers ──
-function openDB() {
-  return new Promise((resolve) => {
-    if (typeof window === 'undefined' || !window.indexedDB) {
-      resolve(null);
-      return;
+/**
+ * Clean up legacy cookies and IndexedDB if present from previous versions
+ */
+function cleanupLegacyStorage() {
+  if (typeof window === 'undefined') return;
+  try {
+    document.cookie = `${STORAGE_KEY}=; Max-Age=0; path=/; SameSite=Lax`;
+    if (window.indexedDB?.deleteDatabase) {
+      window.indexedDB.deleteDatabase('portfolio_antispam_db');
     }
-    try {
-      const request = indexedDB.open(DB_NAME, 1);
-      request.onupgradeneeded = (e) => {
-        const db = e.target.result;
-        if (!db.objectStoreNames.contains(DB_STORE)) {
-          db.createObjectStore(DB_STORE, { keyPath: 'id' });
-        }
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => resolve(null);
-    } catch {
-      resolve(null);
-    }
-  });
-}
-
-async function getFromIndexedDB() {
-  const db = await openDB();
-  if (!db) return null;
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction(DB_STORE, 'readonly');
-      const store = tx.objectStore(DB_STORE);
-      const req = store.get(STORAGE_KEY);
-      req.onsuccess = () => resolve(req.result ? req.result.data : null);
-      req.onerror = () => resolve(null);
-    } catch {
-      resolve(null);
-    }
-  });
-}
-
-async function setToIndexedDB(data) {
-  const db = await openDB();
-  if (!db) return;
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction(DB_STORE, 'readwrite');
-      const store = tx.objectStore(DB_STORE);
-      store.put({ id: STORAGE_KEY, data, updatedAt: Date.now() });
-      tx.oncomplete = () => resolve(true);
-      tx.onerror = () => resolve(false);
-    } catch {
-      resolve(false);
-    }
-  });
+  } catch {
+    // Ignore errors during legacy cleanup
+  }
 }
 
 /**
- * Check if the user has already sent a message across any browser storage layer
+ * Get remaining cooldown time in milliseconds (0 if unlocked)
  */
-export async function hasUserSentMessage() {
-  if (typeof window === 'undefined') return false;
+export async function getCooldownRemaining() {
+  if (typeof window === 'undefined') return 0;
 
-  // 1. Check localStorage
-  let localData = null;
+  cleanupLegacyStorage();
+
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) localData = JSON.parse(raw);
+    if (!raw) return 0;
+
+    const record = JSON.parse(raw);
+    if (record?.sent === true && record?.timestamp) {
+      const elapsed = Date.now() - record.timestamp;
+      const remaining = COOLDOWN_DURATION_MS - elapsed;
+
+      if (remaining > 0) {
+        return remaining;
+      }
+
+      // Cooldown expired: remove record
+      localStorage.removeItem(STORAGE_KEY);
+    }
   } catch {
-    // Ignore localStorage disabled
+    // Ignore localStorage read errors
   }
 
-  // 2. Check sessionStorage
-  let sessionData = null;
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (raw) sessionData = JSON.parse(raw);
-  } catch {
-    // Ignore
-  }
-
-  // 3. Check Cookie
-  let cookieData = null;
-  try {
-    const raw = getCookie(STORAGE_KEY);
-    if (raw) cookieData = JSON.parse(raw);
-  } catch {
-    // Ignore
-  }
-
-  // 4. Check IndexedDB
-  const idbData = await getFromIndexedDB();
-
-  // Find if any tier has a valid submission record
-  const record = localData || sessionData || cookieData || idbData;
-
-  if (record && record.sent === true) {
-    // Re-synchronize all storage tiers so that if localStorage was cleared, it is immediately restored
-    const payload = JSON.stringify(record);
-    try { localStorage.setItem(STORAGE_KEY, payload); } catch {}
-    try { sessionStorage.setItem(STORAGE_KEY, payload); } catch {}
-    try { setCookie(STORAGE_KEY, payload); } catch {}
-    setToIndexedDB(record);
-    return true;
-  }
-
-  return false;
+  return 0;
 }
 
 /**
- * Record a message submission across all storage tiers
+ * Check if the user is currently in the 3-minute cooldown window
+ */
+export async function hasUserSentMessage() {
+  const remaining = await getCooldownRemaining();
+  return remaining > 0;
+}
+
+/**
+ * Record a message submission in localStorage (starts 3-minute cooldown)
  */
 export async function recordMessageSent(sender = '') {
   if (typeof window === 'undefined') return;
@@ -179,17 +112,9 @@ export async function recordMessageSent(sender = '') {
     timestamp: Date.now(),
   };
 
-  const payload = JSON.stringify(record);
-
-  // 1. localStorage
-  try { localStorage.setItem(STORAGE_KEY, payload); } catch {}
-
-  // 2. sessionStorage
-  try { sessionStorage.setItem(STORAGE_KEY, payload); } catch {}
-
-  // 3. Cookie (persists across storage clears unless cookies specifically deleted)
-  try { setCookie(STORAGE_KEY, payload); } catch {}
-
-  // 4. IndexedDB (separate subsystem from localStorage)
-  await setToIndexedDB(record);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(record));
+  } catch {
+    // Ignore localStorage write errors (e.g. storage disabled / quota exceeded)
+  }
 }
