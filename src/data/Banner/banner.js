@@ -12,7 +12,7 @@ export const bannerData = [
     active: true,
     version: 'B1',
     logo: worksLogos.barstile,
-    title: 'Barstile 1.0.1',
+    title: 'Barstile 1.1',
     subtitle: 'is now released publicly!',
     ctaText: 'Visit Barstile',
     ctaUrl: 'https://barstile.pages.dev',
